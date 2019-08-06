@@ -2,6 +2,7 @@
 
 const module_name = __filename.slice(__dirname.length + 1, -3);
 
+
 // Decode type of audio control command
 function decode_audio_control_command(data) {
 	// Base units
@@ -18,7 +19,7 @@ function decode_audio_control_command(data) {
 	// Bounce if bit8 (no bits set) is true
 	if (mask.bit8) {
 		data.value += 'empty value';
-		return;
+		return null;
 	}
 
 	let command;
@@ -145,6 +146,7 @@ function decode_audio_control_command(data) {
 	return command;
 }
 
+// Audio control (i.e. source)
 // Decode various audio control/DSP/EQ commands
 function decode_audio_control(data) {
 	data.command = 'con';
@@ -183,13 +185,13 @@ function decode_audio_control(data) {
 		case 'source' : {
 			switch (cmd_value) {
 				case 0x00 :
-				case 0xA0 : update.status('rad.source_name', 'cd'); break;
+				case 0xA0 : update.status('rad.source_name', 'cd', false); break;
 
 				case 0x01 :
-				case 0xA1 : update.status('rad.source_name', 'tuner/tape'); break;
+				case 0xA1 : update.status('rad.source_name', 'tuner/tape', false); break;
 
 				case 0x0F :
-				case 0xAF : update.status('rad.source_name', 'off');
+				case 0xAF : update.status('rad.source_name', 'off', false);
 			}
 
 			// Technically not legit
@@ -203,12 +205,13 @@ function decode_audio_control(data) {
 		}
 	}
 
-	// Update status var with interpreted value
-	update.status('rad.' + cmd_type, cmd_value);
+	// Update status object with interpreted value
+	update.status('rad.' + cmd_type, cmd_value, false);
 
 	return data;
 }
 
+// Broadcast: BM button
 function decode_bm_button(data) {
 	let action = 'depress';
 	let button;
@@ -289,152 +292,10 @@ function decode_bm_button(data) {
 	return data;
 }
 
-
-// Parse data sent to RAD module
-function parse_in(data) {
-	switch (data.msg[0]) {
-		case 0x01 : {
-			// When RAD receives a device status request, send DSP a device status request
-			bus.cmds.request_device_status('RAD', 'DSP');
-			break;
-		}
-
-		case 0x47 : { // Broadcast: BM status
-			return data;
-		}
-
-		case 0x48 : { // Broadcast: BM button
-			data = decode_bm_button(data);
-			break;
-		}
-
-		case 0x49 : { // Broadcast: BM knob
-			return data;
-		}
-
-		case 0x4B : { // Broadcast: Cassette status
-			return data;
-		}
-
-		default : {
-			return data;
-		}
-	}
-}
-
-// Parse data sent from RAD module
-function parse_out(data) {
-	// Device status
-	switch (data.msg[0]) {
-		case 0x34 : { // Control: DSP
-			data.command = 'con';
-			data.value   = 'DSP - ';
-
-			switch (data.msg[1]) {
-				case 0x08 : data.value += 'memory get';                break;
-				case 0x09 : data.value += 'EQ button: concert hall';   break;
-				case 0x0A : data.value += 'EQ button: jazz club';      break;
-				case 0x0B : data.value += 'EQ button: cathedral';      break;
-				case 0x0C : data.value += 'EQ button: memory 1';       break;
-				case 0x0D : data.value += 'EQ button: memory 2';       break;
-				case 0x0E : data.value += 'EQ button: memory 3';       break;
-				case 0x0F : data.value += 'EQ button: DSP off';        break;
-				case 0x28 : data.value += 'EQ button: unknown (0x28)'; break;
-
-				case 0x90 : {
-					data.value += 'EQ button: M-Audio off';
-					// Not really the right place to set this var
-					// It should be in the status from DSP itself
-					update.status('dsp.m_audio', false);
-					break;
-				}
-
-				case 0x91 : {
-					data.value += 'EQ button: M-Audio on';
-					update.status('dsp.m_audio', true);
-					break;
-				}
-
-				case 0x95 : {
-					data.value += 'memory set';
-					update.status('dsp.m_audio', false);
-					break;
-				}
-
-				default : {
-					data.value = Buffer.from(data.msg);
-				}
-			}
-			break;
-		}
-
-		case 0x36 : { // Audio control (i.e. source)
-			data = decode_audio_control(data);
-			break;
-		}
-
-		case 0x38 : { // Control: CD
-			data.command = 'con';
-			data.value   = 'CD - ';
-
-			// Command
-			switch (data.msg[1]) {
-				case 0x00 : data.value += 'status';       break;
-				case 0x01 : data.value += 'stop';         break;
-				case 0x02 : data.value += 'pause';        break;
-				case 0x03 : data.value += 'play';         break;
-				case 0x04 : data.value += 'fast-forward'; break;
-				case 0x05 : data.value += 'fast-reverse'; break;
-				case 0x06 : data.value += 'scan-off';     break;
-				case 0x07 : data.value += 'end';          break;
-				case 0x08 : data.value += 'random-off';
-			}
-
-			break;
-		}
-
-		case 0x4A : { // Control: Cassette
-			BMBT.cassette_status(data.msg[1]);
-
-			data.command = 'con';
-			data.value   = 'cassette: ';
-
-			switch (data.msg[1]) {
-				case 0x00 : data.value += 'power off'; break;
-				case 0xFF : data.value += 'power on';  break;
-				default   : data.value += 'unknown 0x' + data.msg[1].toString(16);
-			}
-			break;
-		}
-
-		case 0x46 : { // Control: LCD
-			data.command = 'con';
-			data.value   = 'LCD: ';
-
-			switch (data.msg[1]) {
-				case 0x0E : data.value += 'off'; break;
-				default   : data.value += data.msg[1];
-			}
-			break;
-		}
-
-		case 0xA5 : { // Control: Screen text
-			data.command = 'con';
-			data.value   = 'screen text TODO';
-			break;
-		}
-
-		default : {
-			data.command = 'unk';
-			data.value   = Buffer.from(data.msg);
-		}
-	}
-
-	log.bus(data);
-}
-
 // Send audio control commands
 function audio_control(command) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	let cmd = 0x36;
 
 	let msgs = {
@@ -514,6 +375,8 @@ function audio_control(command) {
 }
 
 function cassette_control(command) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	let cmd = 0x4A;
 
 	let msgs = {
@@ -558,6 +421,8 @@ function cassette_control(command) {
 }
 
 function volume_control(value = 1) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	let msg_value;
 	switch (value) {
 		case 5 : msg_value = 0x51; break;
@@ -586,7 +451,9 @@ function volume_control(value = 1) {
 
 
 // Power on DSP amp and GPIO pin for amplifier
-function audio_power(power_state) {
+function audio_power(power_state = false) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	// Bounce if we're not configured to emulate the RAD module
 	if (config.emulate.rad !== true) return;
 
@@ -605,8 +472,8 @@ function audio_power(power_state) {
 			audio_control(false);
 			cassette_control(false);
 
-			update.status('dsp.ready', false);
-			update.status('dsp.reset', true);
+			update.status('dsp.ready', false, false);
+			update.status('dsp.reset', true,  false);
 
 			break;
 		}
@@ -627,67 +494,184 @@ function audio_power(power_state) {
 				bus.cmds.request_device_status(module_name, module_request);
 			});
 
-			// Not really any good idea why it's this sequence of commands that turns the DSP amp on
-			// I've looked at logs from three different DSP-equipped cars and it's always this sequence
-
-			// Set DSP source to off
-			// audio_control(false);
-
-			// Send DSP functions 1 and 0
-			// audio_control('dsp-1');
-			// audio_control('dsp-0');
-
-			// Set DSP source to on (tuner/tape)
-			audio_control(true);
+			// Set DSP source to whatever is configured
+			audio_control(config.media.dsp.default_source);
 
 			// Turn on BMBT
-			cassette_control(true);
+			setTimeout(() => { cassette_control(true); }, 250);
 
+			// DSP powers up with volume set to 0, so bring up volume by configured amount
 			setTimeout(() => {
-				for (let pass = 0; pass < 13; pass++) {
-					setTimeout(() => { volume_control(5); }, 5 * pass);
+				for (let pass = 0; pass < config.rad.power_on_volume; pass++) {
+					setTimeout(() => { volume_control(5); }, 10 * pass);
 				}
-			}, 250);
+			}, 500);
 
-			// Increase volume after power on
-			// setTimeout(() => {
-			// 	let msg_vol;
-			// 	switch (config.bmbt.vol_at_poweron) {
-			// 		case false : msg_vol = [ 0x1C, 0x01, 0x01, 0x1A ]; break;
-			// 		case true  : msg_vol = [ 0x1C, 0x01, 0x01, 0x08 ];
-			// 	}
+			// Delay sending EQ command 750ms + 12ms per volume step
+			let dsp_eq_delay = (750 + (12 * config.rad.power_on_volume));
 
-			// 	bus.data.send({
-			// 		src : 'DIA',
-			// 		dst : 'DSP',
-			// 		msg : msg_vol,
-			// 	});
-			// }, 250);
+			// Send configured DSP EQ (it seems to forget over time)
+			setTimeout(() => {
+				DSP.eq_encode(config.media.dsp.eq);
+			}, dsp_eq_delay);
 		}
 	}
 }
 
 
 function init_listeners() {
+	// Bounce if we're not configured to emulate the RAD module or not in an E39
+	if (config.intf.ibus.enabled !== true) return;
+	if (config.emulate.rad       !== true) return;
+
 	// Perform commands on power lib active event
-	update.on('status.power.active', (data) => {
-		// Bounce if we're not configured to emulate the RAD module
-		if (config.emulate.rad !== true) return;
+	// TODO: Make this a config value
+	power.on('active', (power_state) => {
+		setTimeout(() => { audio_power(power_state); }, 200);
+	});
 
-		if (data.new === false) {
+	// Kick DSP amp config.rad.after_start_delay ms after engine start
+	IKE.on('ignition-start-end', () => {
+		setTimeout(() => {
 			audio_power(false);
-			return;
-		}
 
-		log.module('Waiting for DSP ready after reset event');
+			setTimeout(() => { audio_power(true); }, config.rad.after_start_delay);
+		}, config.rad.after_start_delay);
 	});
 
-	update.on('status.dsp.reset', (data) => {
-		if (data.new === true) return;
-		setTimeout(() => { audio_power(true); }, 250);
-	});
 
 	log.msg('Initialized listeners');
+}
+
+
+// Parse data sent to RAD module
+function parse_in(data) {
+	switch (data.msg[0]) {
+		case 0x01 : {
+			// When RAD receives a device status request, send DSP a device status request
+			bus.cmds.request_device_status('RAD', 'DSP');
+			break;
+		}
+
+		case 0x47 : { // Broadcast: BM status
+			return data;
+		}
+
+		case 0x48 : return decode_bm_button(data);
+
+		case 0x49 : { // Broadcast: BM knob
+			return data;
+		}
+
+		case 0x4B : { // Broadcast: Cassette status
+			return data;
+		}
+	}
+
+	return data;
+}
+
+// Parse data sent from RAD module
+function parse_out(data) {
+	// Device status
+	switch (data.msg[0]) {
+		case 0x34 : { // Control: DSP
+			data.command = 'con';
+			data.value   = 'DSP - ';
+
+			switch (data.msg[1]) {
+				case 0x08 : data.value += 'memory get';                break;
+				case 0x09 : data.value += 'EQ button: concert hall';   break;
+				case 0x0A : data.value += 'EQ button: jazz club';      break;
+				case 0x0B : data.value += 'EQ button: cathedral';      break;
+				case 0x0C : data.value += 'EQ button: memory 1';       break;
+				case 0x0D : data.value += 'EQ button: memory 2';       break;
+				case 0x0E : data.value += 'EQ button: memory 3';       break;
+				case 0x0F : data.value += 'EQ button: DSP off';        break;
+				case 0x28 : data.value += 'EQ button: unknown (0x28)'; break;
+
+				case 0x90 : {
+					data.value += 'EQ button: M-Audio off';
+					// Not really the right place to set this var
+					// It should be in the status from DSP itself
+					update.status('dsp.m_audio', false, false);
+					break;
+				}
+
+				case 0x91 : {
+					data.value += 'EQ button: M-Audio on';
+					update.status('dsp.m_audio', true, false);
+					break;
+				}
+
+				case 0x95 : {
+					data.value += 'memory set';
+					update.status('dsp.m_audio', false, false);
+					break;
+				}
+
+				default : {
+					data.value = Buffer.from(data.msg);
+				}
+			}
+			break;
+		}
+
+		case 0x36 : return decode_audio_control(data);
+
+		case 0x38 : { // Control: CD
+			data.command = 'con';
+			data.value   = 'CD - ';
+
+			// Command
+			switch (data.msg[1]) {
+				case 0x00 : data.value += 'status';       break;
+				case 0x01 : data.value += 'stop';         break;
+				case 0x02 : data.value += 'pause';        break;
+				case 0x03 : data.value += 'play';         break;
+				case 0x04 : data.value += 'fast-forward'; break;
+				case 0x05 : data.value += 'fast-reverse'; break;
+				case 0x06 : data.value += 'scan-off';     break;
+				case 0x07 : data.value += 'end';          break;
+				case 0x08 : data.value += 'random-off';
+			}
+
+			break;
+		}
+
+		case 0x4A : { // Control: Cassette
+			BMBT.cassette_status(data.msg[1]);
+
+			data.command = 'con';
+			data.value   = 'cassette: ';
+
+			switch (data.msg[1]) {
+				case 0x00 : data.value += 'power off'; break;
+				case 0xFF : data.value += 'power on';  break;
+				default   : data.value += 'unknown 0x' + data.msg[1].toString(16);
+			}
+			break;
+		}
+
+		case 0x46 : { // Control: LCD
+			data.command = 'con';
+			data.value   = 'LCD: ';
+
+			switch (data.msg[1]) {
+				case 0x0E : data.value += 'off'; break;
+				default   : data.value += data.msg[1];
+			}
+			break;
+		}
+
+		case 0xA5 : { // Control: Screen text
+			data.command = 'con';
+			data.value   = 'screen text TODO';
+			break;
+		}
+	}
+
+	return data;
 }
 
 

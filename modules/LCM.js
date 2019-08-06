@@ -4,6 +4,8 @@ const now     = require('performance-now');
 
 // Automatic lights handling
 function auto_lights() {
+	if (config.intf.ibus.enabled !== true) return;
+
 	// Default action is true (enable/process auto lights)
 	let action = true;
 
@@ -23,10 +25,10 @@ function auto_lights() {
 				log.module('Unset autolights timeout');
 			}
 
-			// Set status variables
-			update.status('lights.auto.active',  false);
-			update.status('lights.auto.lowbeam', false);
-			update.status('lights.auto.reason',  null);
+			// Update status object
+			update.status('lights.auto.active',  false, false);
+			update.status('lights.auto.lowbeam', false, false);
+			update.status('lights.auto.reason',  null,  false);
 			break;
 		}
 
@@ -35,8 +37,8 @@ function auto_lights() {
 				log.module('Set autolights timeout');
 			}
 
-			// Set status variable
-			update.status('lights.auto.active', true);
+			// Update status object
+			update.status('lights.auto.active', true, false);
 
 			auto_lights_process();
 		}
@@ -45,9 +47,12 @@ function auto_lights() {
 
 // Logic based on location and time of day, determine if the low beams should be on
 function auto_lights_process() {
+	if (config.intf.ibus.enabled !== true) return;
+
 	// Init variables
 	let new_reason;
 	let new_lowbeam;
+	let night_percentage;
 
 	let now_time  = Date.now();
 	let now_epoch = Math.floor(now_time / 1000);
@@ -72,11 +77,6 @@ function auto_lights_process() {
 	let lights_on  = new Date(sun_times.sunsetStart.getTime() - now_offset);
 	let lights_off = new Date(sun_times.sunriseEnd.getTime()  + now_offset);
 
-	// Debug logging
-	// log.module('   current : \''+now_time+'\'' });
-	// log.module(' lights_on : \''+lights_on+'\''    });
-	// log.module('lights_off : \''+lights_off+'\''   });
-
 	// If ignition is not in run or auto lights are disabled in config,
 	// call auto_lights() to clean up
 	if (status.vehicle.ignition_level < 3 || config.lights.auto !== true) {
@@ -84,34 +84,39 @@ function auto_lights_process() {
 		return;
 	}
 
-	// log.module('Processing auto lights' });
-
 	// Check wipers
 	if (status.gm.wipers.speed !== null && status.gm.wipers.speed !== 'off' && status.gm.wipers.speed !== 'spray') {
-		new_reason  = 'wipers on';
-		new_lowbeam = true;
+		new_reason       = 'wipers on';
+		new_lowbeam      = true;
+		night_percentage = 1;
 	}
 	// Check time of day
 	else if (now_time < lights_off) {
-		new_reason  = 'before dawn';
-		new_lowbeam = true;
+		new_reason       = 'before dawn';
+		new_lowbeam      = true;
+		night_percentage = now_time / lights_off;
 	}
 	else if (now_time > lights_off && now_time < lights_on) {
-		new_reason  = 'after dawn, before dusk';
-		new_lowbeam = false;
+		new_reason       = 'after dawn, before dusk';
+		new_lowbeam      = false;
+		night_percentage = 0;
 	}
 	else if (now_time > lights_on) {
-		new_reason  = 'after dusk';
-		new_lowbeam = true;
+		new_reason       = 'after dusk';
+		new_lowbeam      = true;
+		night_percentage = lights_on / now_time;
 	}
 	else {
-		new_reason  = 'failsafe';
-		new_lowbeam = true;
+		new_reason       = 'failsafe';
+		new_lowbeam      = true;
+		night_percentage = 1;
 	}
 
-	update.status('lights.auto.reason', new_reason);
+	update.status('lights.auto.reason', new_reason, false);
 
-	if (update.status('lights.auto.lowbeam', new_lowbeam)) {
+	update.status('lights.auto.night_percentage', parseFloat(night_percentage.toFixed(2)) * 100, false);
+
+	if (update.status('lights.auto.lowbeam', new_lowbeam, false)) {
 		// Show autolights status in cluster
 		IKE.text_override('AL: ' + status.lights.auto.lowbeam);
 	}
@@ -120,11 +125,14 @@ function auto_lights_process() {
 
 	// Process/send LCM data on 5 second timeout (for safety)
 	// LCM diag command timeout is 15 seconds
+	// TODO: Move this value into config object
 	LCM.timeout.lights_auto = setTimeout(auto_lights_process, 5000);
 }
 
 // Cluster/interior backlight
 function set_backlight(value) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	log.module('Setting backlight to ' + value);
 
 	bus.data.send({
@@ -136,6 +144,8 @@ function set_backlight(value) {
 
 // Get LCM coding data
 function coding_get() {
+	if (config.intf.ibus.enabled !== true) return;
+
 	// Get all 20 blocks of coding data
 	for (let byte = 0; byte < 21; byte++) {
 		bus.data.send({
@@ -147,6 +157,8 @@ function coding_get() {
 
 // Get LCM identity data
 function identity_get() {
+	if (config.intf.ibus.enabled !== true) return;
+
 	bus.data.send({
 		src : 'DIA',
 		msg : [ 0x00 ],
@@ -229,20 +241,20 @@ function comfort_turn_flash(action) {
 
 	log.module('Comfort turn action: ' + action + ', elapsed: ' + status.lights.turn.depress_elapsed);
 
-	// Update status variables, and prepare cluster message
+	// Update status object, and prepare cluster message
 	let cluster_msg_outer;
 	switch (action) {
 		case 'left' :
-			// Set status variables
-			update.status('lights.turn.left.comfort',  true);
-			update.status('lights.turn.right.comfort', false);
+			// Update status object
+			update.status('lights.turn.left.comfort',  true,  false);
+			update.status('lights.turn.right.comfort', false, false);
 			cluster_msg_outer = '< < < < < < <';
 			break;
 
 		case 'right' :
-			// Set status variables
-			update.status('lights.turn.left.comfort',  false);
-			update.status('lights.turn.right.comfort', true);
+			// Update status object
+			update.status('lights.turn.left.comfort',  false, false);
+			update.status('lights.turn.right.comfort', true,  false);
 			cluster_msg_outer = '> > > > > > >';
 	}
 
@@ -257,7 +269,7 @@ function comfort_turn_flash(action) {
 	reset();
 
 	// Begin comfort turn cooldown period
-	update.status('lights.turn.comfort_cool', false);
+	update.status('lights.turn.comfort_cool', false, false);
 
 	// Calculate timeout length, accounting for the time from the initial flash
 	// 1 flash ~ 500ms, so 5x flash ~ 2500ms
@@ -268,14 +280,14 @@ function comfort_turn_flash(action) {
 
 	// Timeout for turning off the comfort turn signal
 	setTimeout(() => {
-		// Update status variables
-		update.status('lights.turn.left.comfort',  false);
-		update.status('lights.turn.right.comfort', false);
+		// Update status object
+		update.status('lights.turn.left.comfort',  false, false);
+		update.status('lights.turn.right.comfort', false, false);
 		reset();
 	}, timer_off);
 
 	// Timeout for comfort turn cooldown period
-	setTimeout(() => { update.status('lights.turn.comfort_cool', true); }, timer_cool);
+	setTimeout(() => { update.status('lights.turn.comfort_cool', true, false); }, timer_cool);
 }
 
 // Decode various bits of data into usable information
@@ -292,10 +304,10 @@ function decode(data) {
 				},
 			};
 
-			update.status('vehicle.vin', parse.vin);
+			update.status('vehicle.vin', parse.vin, false);
 
-			update.status('vehicle.coding.since_service.days',   parse.since_service.days);
-			update.status('vehicle.coding.since_service.liters', parse.since_service.liters);
+			update.status('vehicle.coding.since_service.days',   parse.since_service.days,   false);
+			update.status('vehicle.coding.since_service.liters', parse.since_service.liters, false);
 			break;
 		}
 
@@ -315,43 +327,43 @@ function decode(data) {
 			};
 
 			// On
-			update.status('lights.all_off', masks.m0.b8);
+			update.status('lights.all_off', masks.m0.b8, false);
 
-			update.status('lights.standing.front',    masks.m0.b0);
-			update.status('lights.lowbeam',           masks.m0.b1);
-			update.status('lights.highbeam',          masks.m0.b2);
-			update.status('lights.fog.front',         masks.m0.b3);
-			update.status('lights.fog.rear',          masks.m0.b4);
-			update.status('lights.turn.left.active',  masks.m0.b5);
-			update.status('lights.turn.right.active', masks.m0.b6);
-			update.status('lights.turn.fast',         masks.m0.b7);
+			update.status('lights.standing.front',    masks.m0.b0, false);
+			update.status('lights.lowbeam',           masks.m0.b1, false);
+			update.status('lights.highbeam',          masks.m0.b2, false);
+			update.status('lights.fog.front',         masks.m0.b3, false);
+			update.status('lights.fog.rear',          masks.m0.b4, false);
+			update.status('lights.turn.left.active',  masks.m0.b5, false);
+			update.status('lights.turn.right.active', masks.m0.b6, false);
+			update.status('lights.turn.fast',         masks.m0.b7, false);
 
-			update.status('lights.brake',            masks.m2.b1);
-			update.status('lights.turn.sync',        masks.m2.b2);
-			update.status('lights.standing.rear',    masks.m2.b3);
-			update.status('lights.trailer.standing', masks.m2.b4);
-			update.status('lights.reverse',          masks.m2.b5);
-			update.status('lights.trailer.reverse',  masks.m2.b6);
-			update.status('lights.hazard',           masks.m2.b7);
+			update.status('lights.brake',            masks.m2.b1, false);
+			update.status('lights.turn.sync',        masks.m2.b2, false);
+			update.status('lights.standing.rear',    masks.m2.b3, false);
+			update.status('lights.trailer.standing', masks.m2.b4, false);
+			update.status('lights.reverse',          masks.m2.b5, false);
+			update.status('lights.trailer.reverse',  masks.m2.b6, false);
+			update.status('lights.hazard',           masks.m2.b7, false);
 
 			// Faulty
-			update.status('lights.faulty.all_ok', masks.m1.b8);
+			update.status('lights.faulty.all_ok', masks.m1.b8, false);
 
-			update.status('lights.faulty.standing.front', masks.m1.b0);
-			update.status('lights.faulty.lowbeam.both',   masks.m1.b1);
-			update.status('lights.faulty.highbeam',       masks.m1.b2);
-			update.status('lights.faulty.fog.front',      masks.m1.b3);
-			update.status('lights.faulty.fog.rear',       masks.m1.b4);
-			update.status('lights.faulty.turn.left',      masks.m1.b5);
-			update.status('lights.faulty.turn.right',     masks.m1.b6);
-			update.status('lights.faulty.license_plate',  masks.m1.b7);
+			update.status('lights.faulty.standing.front', masks.m1.b0, false);
+			update.status('lights.faulty.lowbeam.both',   masks.m1.b1, false);
+			update.status('lights.faulty.highbeam',       masks.m1.b2, false);
+			update.status('lights.faulty.fog.front',      masks.m1.b3, false);
+			update.status('lights.faulty.fog.rear',       masks.m1.b4, false);
+			update.status('lights.faulty.turn.left',      masks.m1.b5, false);
+			update.status('lights.faulty.turn.right',     masks.m1.b6, false);
+			update.status('lights.faulty.license_plate',  masks.m1.b7, false);
 
-			update.status('lights.faulty.brake.right',         masks.m3.b0);
-			update.status('lights.faulty.brake.left',          masks.m3.b1);
-			update.status('lights.faulty.standing.rear.right', masks.m3.b2);
-			update.status('lights.faulty.standing.rear.left',  masks.m3.b3);
-			update.status('lights.faulty.lowbeam.right',       masks.m3.b4);
-			update.status('lights.faulty.lowbeam.left',        masks.m3.b5);
+			update.status('lights.faulty.brake.right',         masks.m3.b0, false);
+			update.status('lights.faulty.brake.left',          masks.m3.b1, false);
+			update.status('lights.faulty.standing.rear.right', masks.m3.b2, false);
+			update.status('lights.faulty.standing.rear.left',  masks.m3.b3, false);
+			update.status('lights.faulty.lowbeam.right',       masks.m3.b4, false);
+			update.status('lights.faulty.lowbeam.left',        masks.m3.b5, false);
 			break;
 		}
 
@@ -360,45 +372,86 @@ function decode(data) {
 			data.msg = data.msg.slice(1);
 
 			// Set raw IO status bitmask data
-			update.status('lcm.io.0',  data.msg[0]);
-			update.status('lcm.io.1',  data.msg[1]);
-			update.status('lcm.io.2',  data.msg[2]);
-			update.status('lcm.io.3',  data.msg[3]);
-			update.status('lcm.io.4',  data.msg[4]);
-			update.status('lcm.io.5',  data.msg[5]);
-			update.status('lcm.io.6',  data.msg[6]);
-			update.status('lcm.io.7',  data.msg[7]);
-			update.status('lcm.io.8',  data.msg[8]);
-			update.status('lcm.io.9',  data.msg[9]); // Voltage: Terminal 30
-			update.status('lcm.io.10', data.msg[10]);
-			update.status('lcm.io.11', data.msg[11]);
-			update.status('lcm.io.12', data.msg[12]);
-			update.status('lcm.io.13', data.msg[13]);
-			update.status('lcm.io.14', data.msg[14]);
-			update.status('lcm.io.15', data.msg[15]);
-			update.status('lcm.io.16', data.msg[16]);
-			update.status('lcm.io.17', data.msg[17]);
-			update.status('lcm.io.18', data.msg[18]); // Changes while running (autolevel?)
-			update.status('lcm.io.19', data.msg[19]); // Changes while running (autolevel?)
-			update.status('lcm.io.20', data.msg[20]);
-			update.status('lcm.io.21', data.msg[21]); // Changes while running (autolevel?)
-			update.status('lcm.io.22', data.msg[22]);
-			update.status('lcm.io.23', data.msg[23]);
-			update.status('lcm.io.24', data.msg[24]);
-			update.status('lcm.io.25', data.msg[25]);
-			update.status('lcm.io.26', data.msg[26]);
-			update.status('lcm.io.27', data.msg[27]);
-			update.status('lcm.io.28', data.msg[28]);
-			update.status('lcm.io.29', data.msg[29]); // Voltage: Flash to pass
-			update.status('lcm.io.30', data.msg[30]); // Voltage: Turn signal
-			update.status('lcm.io.31', data.msg[31]);
+			update.status('lcm.io.0',  data.msg[0],  false);
+			update.status('lcm.io.1',  data.msg[1],  false);
+			update.status('lcm.io.2',  data.msg[2],  false);
+			update.status('lcm.io.3',  data.msg[3],  false);
+			update.status('lcm.io.4',  data.msg[4],  false);
+			update.status('lcm.io.5',  data.msg[5],  false);
+			update.status('lcm.io.6',  data.msg[6],  false);
+			update.status('lcm.io.7',  data.msg[7],  false);
+			update.status('lcm.io.8',  data.msg[8],  false);
+			update.status('lcm.io.9',  data.msg[9],  false); // Voltage: Terminal 30
+			update.status('lcm.io.10', data.msg[10], false);
+			update.status('lcm.io.11', data.msg[11], false);
+			update.status('lcm.io.12', data.msg[12], false);
+			update.status('lcm.io.13', data.msg[13], false);
+			update.status('lcm.io.14', data.msg[14], false);
+			update.status('lcm.io.15', data.msg[15], false); // Voltage: Potentiometer, dimmer
+			update.status('lcm.io.16', data.msg[16], false); // Voltage: Potentiometer, LWR
+			update.status('lcm.io.17', data.msg[17], false);
+			update.status('lcm.io.18', data.msg[18], false); // Changes while running (autolevel?)
+			update.status('lcm.io.19', data.msg[19], false); // Changes while running (autolevel?), or Voltage, photo cell
+			update.status('lcm.io.20', data.msg[20], false);
+			update.status('lcm.io.21', data.msg[21], false); // Changes while running (autolevel?)
+			update.status('lcm.io.22', data.msg[22], false);
+			update.status('lcm.io.23', data.msg[23], false); // Voltage: LWR sensor, front
+			update.status('lcm.io.24', data.msg[24], false); // Voltage: LWR sensor, rear
+			update.status('lcm.io.25', data.msg[25], false);
+			update.status('lcm.io.26', data.msg[26], false);
+			update.status('lcm.io.27', data.msg[27], false);
+			update.status('lcm.io.28', data.msg[28], false);
+			update.status('lcm.io.29', data.msg[29], false); // Voltage: Flash to pass
+			update.status('lcm.io.30', data.msg[30], false); // Voltage: Turn signal
+			update.status('lcm.io.31', data.msg[31], false);
 
 			// Decode values
-			update.status('lcm.dimmer.value_2', data.msg[15]);
+			update.status('lcm.dimmer.value_2', data.msg[15], false);
 
-			update.status('lcm.voltage.terminal_30',        parseFloat((data.msg[9] * 0.0708).toFixed(2)));
-			update.status('lcm.voltage.flash_to_pass',      parseFloat(data.msg[29] / 51));
-			update.status('lcm.voltage.turn_signal_switch', parseFloat(data.msg[30] / 51));
+			let voltages = {
+				pot : {
+					dimmer : num.round2((data.msg[15] * 5) / 255),
+					lwr    : num.round2((data.msg[16] * 5) / 255),
+				},
+
+				lwr : {
+					front : num.round2((data.msg[23] * 5) / 255),
+					rear  : num.round2((data.msg[24] * 5) / 255),
+				},
+			};
+
+			update.status('lcm.voltage.lwr.front.current',  voltages.lwr.front,  false);
+			update.status('lcm.voltage.lwr.rear.current',   voltages.lwr.rear,   false);
+			update.status('lcm.voltage.pot.dimmer.current', voltages.pot.dimmer, false);
+			update.status('lcm.voltage.pot.lwr.current',    voltages.pot.lwr,    false);
+
+			// Set min/max values
+			if (num.ok2minmax(voltages.lwr.front)) {
+				if (voltages.lwr.front < status.lcm.voltage.lwr.front.minimum) update.status('lcm.voltage.lwr.front.minimum', voltages.lwr.front);
+				if (voltages.lwr.front > status.lcm.voltage.lwr.front.maximum) update.status('lcm.voltage.lwr.front.maximum', voltages.lwr.front);
+			}
+
+			if (num.ok2minmax(voltages.lwr.rear)) {
+				if (voltages.lwr.rear < status.lcm.voltage.lwr.rear.minimum) update.status('lcm.voltage.lwr.rear.minimum', voltages.lwr.rear);
+				if (voltages.lwr.rear > status.lcm.voltage.lwr.rear.maximum) update.status('lcm.voltage.lwr.rear.maximum', voltages.lwr.rear);
+			}
+
+			if (num.ok2minmax(voltages.pot.dimmer)) {
+				if (voltages.pot.dimmer < status.lcm.voltage.pot.dimmer.minimum) update.status('lcm.voltage.pot.dimmer.minimum', voltages.pot.dimmer);
+				if (voltages.pot.dimmer > status.lcm.voltage.pot.dimmer.maximum) update.status('lcm.voltage.pot.dimmer.maximum', voltages.pot.dimmer);
+			}
+
+			if (num.ok2minmax(voltages.pot.lwr)) {
+				if (voltages.pot.lwr < status.lcm.voltage.pot.lwr.minimum) update.status('lcm.voltage.pot.lwr.minimum', voltages.pot.lwr);
+				if (voltages.pot.lwr > status.lcm.voltage.pot.lwr.maximum) update.status('lcm.voltage.pot.lwr.maximum', voltages.pot.lwr);
+			}
+
+			// TODO: Move up to voltages object
+			update.status('lcm.voltage.photo_cell',         parseFloat((data.msg[19] * 5) / 255), false);
+			update.status('lcm.voltage.flash_to_pass',      parseFloat((data.msg[29] * 5) / 255), false);
+			update.status('lcm.voltage.turn_signal_switch', parseFloat((data.msg[30] * 5) / 255), false);
+
+			update.status('lcm.voltage.terminal_30', parseFloat(((data.msg[9] * 18) / 255).toFixed(2)), false);
 
 			// Decode bitmasks
 			let masks = {
@@ -414,80 +467,80 @@ function decode(data) {
 			};
 
 			// Bitmasks
-			update.status('lcm.clamp.c_30a', masks.m0.b0);
-			update.status('lcm.clamp.c_15',  masks.m3.b5);
-			update.status('lcm.clamp.c_r',   masks.m0.b6);
-			update.status('lcm.clamp.c_30b', masks.m0.b7);
+			update.status('lcm.clamp.c_30a', masks.m0.b0, false);
+			update.status('lcm.clamp.c_15',  masks.m3.b5, false);
+			update.status('lcm.clamp.c_r',   masks.m0.b6, false);
+			update.status('lcm.clamp.c_30b', masks.m0.b7, false);
 
-			update.status('lcm.input.fire_extinguisher',         masks.m0.b1);
-			update.status('lcm.input.preheating_fuel_injection', masks.m0.b2);
-			update.status('lcm.input.carb',                      masks.m0.b4);
+			update.status('lcm.input.fire_extinguisher',         masks.m0.b1, false);
+			update.status('lcm.input.preheating_fuel_injection', masks.m0.b2, false);
+			update.status('lcm.input.carb',                      masks.m0.b4, false);
 
-			update.status('lcm.input.key_in_ignition',   masks.m1.b0);
-			update.status('lcm.input.seat_belts_lock',   masks.m1.b1);
-			update.status('lcm.input.kfn',               masks.m1.b5);
-			update.status('lcm.input.armoured_door',     masks.m1.b6);
-			update.status('lcm.input.brake_fluid_level', masks.m1.b7);
+			update.status('lcm.input.key_in_ignition',   masks.m1.b0, false);
+			update.status('lcm.input.seat_belts_lock',   masks.m1.b1, false);
+			update.status('lcm.input.kfn',               masks.m1.b5, false);
+			update.status('lcm.input.armoured_door',     masks.m1.b6, false);
+			update.status('lcm.input.brake_fluid_level', masks.m1.b7, false);
 
-			update.status('lcm.input.air_suspension',     masks.m3.b0);
-			update.status('lcm.input.hold_up_alarm',      masks.m3.b1);
-			update.status('lcm.input.washer_fluid_level', masks.m3.b2);
-			update.status('lcm.input.engine_failsafe',    masks.m3.b6);
-			update.status('lcm.input.tire_defect',        masks.m3.b7);
+			update.status('lcm.input.air_suspension',     masks.m3.b0, false);
+			update.status('lcm.input.hold_up_alarm',      masks.m3.b1, false);
+			update.status('lcm.input.washer_fluid_level', masks.m3.b2, false);
+			update.status('lcm.input.engine_failsafe',    masks.m3.b6, false);
+			update.status('lcm.input.tire_defect',        masks.m3.b7, false);
 
-			update.status('lcm.input.vertical_aim', masks.m6.b1);
+			update.status('lcm.input.vertical_aim', masks.m6.b1, false);
 
-			update.status('lcm.mode.failsafe', masks.m8.b0);
-			update.status('lcm.mode.sleep',    masks.m8.b6);
+			update.status('lcm.mode.failsafe', masks.m8.b0, false);
+			update.status('lcm.mode.sleep',    masks.m8.b6, false);
 
-			update.status('lcm.output.license.rear_left',    masks.m4.b2);
-			update.status('lcm.output.brake.rear_left',      masks.m4.b3);
-			update.status('lcm.output.brake.rear_right',     masks.m4.b4);
-			update.status('lcm.output.highbeam.front_right', masks.m4.b5);
-			update.status('lcm.output.highbeam.front_left',  masks.m4.b6);
+			update.status('lcm.output.license.rear_left',    masks.m4.b2, false);
+			update.status('lcm.output.brake.rear_left',      masks.m4.b3, false);
+			update.status('lcm.output.brake.rear_right',     masks.m4.b4, false);
+			update.status('lcm.output.highbeam.front_right', masks.m4.b5, false);
+			update.status('lcm.output.highbeam.front_left',  masks.m4.b6, false);
 
-			update.status('lcm.output.standing.front_left',      masks.m5.b0);
-			update.status('lcm.output.standing.inner_rear_left', masks.m5.b1);
-			update.status('lcm.output.fog.front_left',           masks.m5.b2);
-			update.status('lcm.output.reverse.rear_left',        masks.m5.b3);
-			update.status('lcm.output.lowbeam.front_left',       masks.m5.b4);
-			update.status('lcm.output.lowbeam.front_right',      masks.m5.b5);
-			update.status('lcm.output.fog.front_right',          masks.m5.b6);
-			update.status('lcm.output.fog.rear_trailer',         masks.m5.b7);
+			update.status('lcm.output.fog.front_left',           masks.m5.b2, false);
+			update.status('lcm.output.fog.front_right',          masks.m5.b6, false);
+			update.status('lcm.output.fog.rear_right',           masks.m5.b7, false);
+			update.status('lcm.output.fog.rear_trailer',         masks.m8.b4, false);
+			update.status('lcm.output.lowbeam.front_left',       masks.m5.b4, false);
+			update.status('lcm.output.lowbeam.front_right',      masks.m5.b5, false);
+			update.status('lcm.output.reverse.rear_left',        masks.m5.b3, false);
+			update.status('lcm.output.standing.front_left',      masks.m5.b0, false);
+			update.status('lcm.output.standing.inner_rear_left', masks.m5.b1, false);
 
-			update.status('lcm.output.license.rear_right',   masks.m6.b2);
-			update.status('lcm.output.standing.rear_left',   masks.m6.b3);
-			update.status('lcm.output.brake.rear_middle',    masks.m6.b4);
-			update.status('lcm.output.standing.front_right', masks.m6.b5);
-			update.status('lcm.output.turn.front_right',     masks.m6.b6);
-			update.status('lcm.output.turn.rear_left',       masks.m6.b7);
+			update.status('lcm.output.brake.rear_middle',    masks.m6.b4, false);
+			update.status('lcm.output.license.rear_right',   masks.m6.b2, false);
+			update.status('lcm.output.standing.front_right', masks.m6.b5, false);
+			update.status('lcm.output.standing.rear_left',   masks.m6.b3, false);
+			update.status('lcm.output.turn.front_right',     masks.m6.b6, false);
+			update.status('lcm.output.turn.rear_left',       masks.m6.b7, false);
 
-			update.status('lcm.output.turn.rear_right',           masks.m7.b1);
-			update.status('lcm.output.fog.rear_left',             masks.m7.b2);
-			update.status('lcm.output.standing.inner_rear_right', masks.m7.b3);
-			update.status('lcm.output.standing.rear_right',       masks.m7.b4);
-			update.status('lcm.output.turn.side_left',            masks.m7.b5);
-			update.status('lcm.output.turn.front_left',           masks.m7.b6);
-			update.status('lcm.output.reverse.rear_right',        masks.m7.b7);
+			update.status('lcm.output.fog.rear_left',             masks.m7.b2, false);
+			update.status('lcm.output.reverse.rear_right',        masks.m7.b7, false);
+			update.status('lcm.output.standing.inner_rear_right', masks.m7.b3, false);
+			update.status('lcm.output.standing.rear_right',       masks.m7.b4, false);
+			update.status('lcm.output.turn.front_left',           masks.m7.b6, false);
+			update.status('lcm.output.turn.rear_right',           masks.m7.b1, false);
+			update.status('lcm.output.turn.side_left',            masks.m7.b5, false);
 
-			update.status('lcm.output.led.switch_hazard',    masks.m8.b2);
-			update.status('lcm.output.led.switch_light',     masks.m8.b3);
-			update.status('lcm.output.reverse.rear_trailer', masks.m8.b5);
+			update.status('lcm.output.led.switch_hazard',    masks.m8.b2, false);
+			update.status('lcm.output.led.switch_light',     masks.m8.b3, false);
+			update.status('lcm.output.reverse.rear_trailer', masks.m8.b5, false);
 
-			update.status('lcm.switch.hazard',         masks.m1.b4);
-			update.status('lcm.switch.highbeam_flash', masks.m1.b2);
+			update.status('lcm.switch.hazard',         masks.m1.b4, false);
+			update.status('lcm.switch.highbeam_flash', masks.m1.b2, false);
 
-			// update.status('lcm.switch.auto', );
-			update.status('lcm.switch.brake',      masks.m2.b0);
-			update.status('lcm.switch.highbeam',   masks.m2.b1);
-			update.status('lcm.switch.fog_front',  masks.m2.b2);
-			update.status('lcm.switch.fog_rear',   masks.m2.b4);
-			update.status('lcm.switch.standing',   masks.m2.b5);
-			update.status('lcm.switch.turn_right', masks.m2.b6);
-			update.status('lcm.switch.turn_left',  masks.m2.b7);
+			update.status('lcm.switch.brake',      masks.m2.b0, false);
+			update.status('lcm.switch.highbeam',   masks.m2.b1, false);
+			update.status('lcm.switch.fog_front',  masks.m2.b2, false);
+			update.status('lcm.switch.fog_rear',   masks.m2.b4, false);
+			update.status('lcm.switch.standing',   masks.m2.b5, false);
+			update.status('lcm.switch.turn_right', masks.m2.b6, false);
+			update.status('lcm.switch.turn_left',  masks.m2.b7, false);
 
-			update.status('lcm.switch.lowbeam_1', masks.m3.b4);
-			update.status('lcm.switch.lowbeam_2', masks.m3.b3);
+			update.status('lcm.switch.lowbeam_1', masks.m3.b4, false);
+			update.status('lcm.switch.lowbeam_2', masks.m3.b3, false);
 		}
 	}
 }
@@ -500,7 +553,7 @@ function io_encode(object) {
 			b0 : object.clamp_30a,
 			b1 : object.input_fire_extinguisher,
 			b2 : object.input_preheating_fuel_injection,
-			b3 : false,
+			b3 : false, // VGLESP
 			b4 : object.input_carb,
 			b5 : false,
 			b6 : object.clamp_r,
@@ -559,7 +612,7 @@ function io_encode(object) {
 			b4 : object.output_lowbeam_front_left,
 			b5 : object.output_lowbeam_front_right,
 			b6 : object.output_fog_front_right,
-			b7 : object.output_fog_rear_trailer,
+			b7 : object.output_fog_rear_right,
 		}),
 
 		b6 : bitmask.create({
@@ -586,10 +639,10 @@ function io_encode(object) {
 
 		b8 : bitmask.create({
 			b0 : object.mode_failsafe,
-			b1 : false,
+			b1 : false, // KL58G on
 			b2 : object.output_led_switch_hazard,
 			b3 : object.output_led_switch_light,
-			b4 : false,
+			b4 : object.output_fog_rear_trailer,
 			b5 : object.output_reverse_rear_trailer,
 			b6 : object.mode_sleep,
 			b7 : false,
@@ -637,6 +690,8 @@ function io_encode(object) {
 
 // Send 'Set IO status' message to LCM
 function io_set(packet) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	log.module('Setting IO status');
 
 	packet.unshift(0x0C);
@@ -644,33 +699,18 @@ function io_set(packet) {
 		src : 'DIA',
 		msg : packet,
 	});
-
-	// Request the IO status after
-	// setImmediate(() => {
-	// 	LCM.request('io-status');
-	// });
 }
 
 // Make things.. how they should be?
 function reset() {
-	// Determine dimmer value from config, depending if lowbeams are on
-	let reset_dimmer_val;
-	switch (status.lights.auto.lowbeam) {
-		case false : reset_dimmer_val = config.lights.dimmer.lights_off; break;
-		case true  : reset_dimmer_val = config.lights.dimmer.lights_on;
-	}
-
 	// Object of autolights related values
 	let io_object_auto_lights = {
-		dimmer_value_2                   : reset_dimmer_val,
-		output_standing_front_left       : true,
-		output_standing_front_right      : true,
-		output_standing_inner_rear_left  : true,
-		output_standing_inner_rear_right : true,
-		output_standing_rear_left        : true,
-		output_standing_rear_right       : true,
-		switch_fog_rear                  : true, // To leverage the IKE LED as a status indicator
-		switch_lowbeam_1                 : status.lights.auto.lowbeam,
+		dimmer_value_2              : Math.ceil(status.lights.auto.night_percentage * 254),
+		output_standing_front_left  : true,
+		output_standing_front_right : true,
+		output_standing_rear_left   : true,
+		output_standing_rear_right  : true,
+		switch_lowbeam_1            : status.lights.auto.lowbeam,
 	};
 
 	// Object of only comfort turn values
@@ -687,6 +727,8 @@ function reset() {
 
 // Request various things from LCM
 function request(value) {
+	if (config.intf.ibus.enabled !== true) return;
+
 	let src;
 	let msg;
 
@@ -733,6 +775,7 @@ function parse_out(data) {
 		case 0x54 : { // Broadcast: vehicle data
 			data.command = 'bro';
 			data.value   = 'vehicle data';
+
 			decode(data); // Decode it
 			break;
 		}
@@ -740,6 +783,7 @@ function parse_out(data) {
 		case 0x5B : { // Broadcast: light status
 			data.command = 'bro';
 			data.value   = 'light status';
+
 			decode(data); // Decode it
 			break;
 		}
@@ -748,8 +792,7 @@ function parse_out(data) {
 			data.command = 'bro';
 			data.value   = 'dimmer value 1';
 
-			update.status('lcm.dimmer.value_1', data.msg[1]);
-			// update.status('lcm.io.15',          data.msg[1]);
+			update.status('lcm.dimmer.value_1', data.msg[1], false);
 			break;
 		}
 
@@ -777,14 +820,9 @@ function parse_out(data) {
 
 			break;
 		}
-
-		default : {
-			data.command = 'unk';
-			data.value   = Buffer.from(data.msg);
-		}
 	}
 
-	log.bus(data);
+	return data;
 }
 
 // Welcome lights on unlocking/locking
@@ -807,7 +845,7 @@ function welcome_lights(action, override = false) {
 			LCM.counts.welcome_lights = 0;
 
 			// Set status var back to false
-			update.status('lights.welcome_lights', action);
+			update.status('lights.welcome_lights', action, false);
 
 			// Send empty object to turn off all LCM outputs (if vehicle is off)
 			if (status.vehicle.ignition_level === 0) io_encode({});
@@ -817,7 +855,7 @@ function welcome_lights(action, override = false) {
 
 		case true : {
 			// Set status var to true
-			update.status('lights.welcome_lights', action);
+			update.status('lights.welcome_lights', action, false);
 
 			// Send configured welcome lights
 			io_encode(config.lights.welcome_lights);
@@ -839,20 +877,20 @@ function welcome_lights(action, override = false) {
 // Police lights!
 function pl() {
 	if (status.lcm.police_lights.counts.loop >= config.lights.police_lights.limit || status.lcm.police_lights.ok !== true) {
-		update.status('lcm.police_lights.ok', false);
+		update.status('lcm.police_lights.ok', false, false);
 
 		clearTimeout(LCM.timeout.lights_police);
 		LCM.timeout.lights_police = null;
 
 		io_encode({});
 
-		if (update.status('lcm.police_lights.on', false)) {
+		if (update.status('lcm.police_lights.on', false, false)) {
 			setTimeout(IKE.text_urgent_off, 1000);
 		}
 		return;
 	}
 
-	if (update.status('lcm.police_lights.on', true)) {
+	if (update.status('lcm.police_lights.on', true, false)) {
 		IKE.text_warning('   Police lights!   ', 0);
 	}
 
@@ -860,7 +898,8 @@ function pl() {
 		front : {
 			left : {
 				fog      : false,
-				highbeam : pl_check([ 0, 2, 8, 16, 18, 24 ]),
+				highbeam : false,
+				// highbeam : pl_check([ 0, 2, 8, 16, 18, 24 ]),
 				lowbeam  : false,
 				standing : pl_check([ 0, 2, 8, 16, 18, 24 ]),
 				turn     : pl_check([ 4, 6, 10, 20, 22, 26 ]),
@@ -869,7 +908,8 @@ function pl() {
 			},
 			right : {
 				fog      : false,
-				highbeam : pl_check([ 4, 6, 10, 20, 22, 26 ]),
+				highbeam : false,
+				// highbeam : pl_check([ 4, 6, 10, 20, 22, 26 ]),
 				lowbeam  : false,
 				standing : pl_check([ 4, 6, 10, 20, 22, 26 ]),
 				turn     : pl_check([ 0, 2, 8, 16, 18, 24 ]),
@@ -914,8 +954,8 @@ function pl() {
 		output_standing_inner_rear_left  : object.rear.left.standing,
 		output_standing_inner_rear_right : object.rear.right.standing,
 
-		output_standing_rear_left  : object.rear.left.standing,
-		output_standing_rear_right : object.rear.right.standing,
+		output_standing_rear_left  : object.rear.right.standing,
+		output_standing_rear_right : object.rear.left.standing,
 
 		output_brake_rear_left   : object.rear.left.brake,
 		output_brake_rear_middle : object.rear.middle.brake,
@@ -939,11 +979,11 @@ function pl() {
 
 	io_encode(io_object);
 
-	update.status('lcm.police_lights.counts.main', (status.lcm.police_lights.counts.main + 1), false);
+	update.status('lcm.police_lights.counts.main', (status.lcm.police_lights.counts.main + 1));
 
 	if (status.lcm.police_lights.counts.main === 32) {
-		update.status('lcm.police_lights.counts.main', 0, false);
-		update.status('lcm.police_lights.counts.loop', (status.lcm.police_lights.counts.loop + 1));
+		update.status('lcm.police_lights.counts.main', 0);
+		update.status('lcm.police_lights.counts.loop', (status.lcm.police_lights.counts.loop + 1), false);
 	}
 
 	LCM.timeout.lights_police = setTimeout(pl, config.lights.police_lights.delay);
@@ -955,7 +995,7 @@ function pl_check(data) {
 }
 
 function police(action = false) {
-	update.status('lcm.police_lights.ok', action);
+	update.status('lcm.police_lights.ok', action, false);
 
 	if (status.lcm.police_lights.on === action) return;
 
@@ -973,6 +1013,8 @@ function police(action = false) {
 
 // Configure event listeners
 function init_listeners() {
+	if (config.intf.ibus.enabled !== true) return;
+
 	// Refresh data on IKE event
 	IKE.on('obc-refresh', () => {
 		request('dimmer');
